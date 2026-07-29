@@ -1,0 +1,80 @@
+ShortMetar - Komutlar / Commands
+================================
+
+Tum komutlar EuroScope chat kutusuna yazilir, ".sm" ile baslar.
+All commands are typed into the EuroScope chat box, starting with ".sm".
+
+--------------------------------------------------------------------
+.sm help
+  TR: Komut listesini gosterir.
+  EN: Shows the command list.
+
+.sm all
+  TR: Tum LT* meydanlarinin metarlarini listeler.
+  EN: Lists metars for all LT* airports.
+
+.sm used
+  TR: Aktif trafigi gosterir (kalkis + varis birlikte).
+  EN: Shows active traffic (departures + arrivals combined).
+
+.sm online
+  TR: Kendi CID'inizin bagli oldugu sektordeki aktif trafigi gosterir.
+  EN: Shows active traffic in the sector your CID is currently connected to.
+
+.sm online sct ANK_W78_CTR   (kisaca: .sm online sct W78)
+  TR: Belirtilen sektordeki aktif trafigi gosterir.
+  EN: Shows active traffic in the specified sector.
+
+.sm filter LTFM              (veya: .sm filter LTFM,LTAW,LTAI)
+  TR: Tek veya birden fazla meydani virgulle ayirarak filtreler.
+  EN: Filters a single airport, or multiple airports separated by commas.
+
+.sm vatsim
+  TR: Veri kaynagini VATSIM yapar.
+  EN: Sets the data source to VATSIM.
+
+.sm rasat
+  TR: Veri kaynagini RASAT (MGM) yapar (varsayilan).
+  EN: Sets the data source to RASAT (MGM) (default).
+
+.sm eng
+  TR: Dili Ingilizce yapar (varsayilan).
+  EN: Switches language to English (default).
+
+.sm tr
+  TR: Dili Turkce yapar.
+  EN: Switches language to Turkish.
+
+.sm ack
+  TR: Tum sari uyarilari onaylar (panel uzerindeki "C" butonu ile aynidir).
+  EN: Acknowledges all yellow alerts (same as the "C" button on the panel).
+
+.sm refresh
+  TR: METAR verisini hemen gunceller.
+  EN: Updates METAR data immediately.
+
+.sm refresh airport
+  TR: Trafik listesini hemen gunceller.
+  EN: Updates the traffic list immediately.
+
+.sm save
+  TR: Panel konumu ve font boyutunu SMconfig.json dosyasina kaydeder.
+  EN: Saves panel position and font size to SMconfig.json.
+
+.sm reload
+  TR: SMconfig.json dosyasini yeniden yukler.
+  EN: Reloads SMconfig.json.
+
+.sm chatbox   (veya: .sm show)
+  TR: Panel gizliyse tekrar acar.
+  EN: Reopens the panel if it is hidden.
+
+--------------------------------------------------------------------
+Panel uzerindeki butonlar / On-panel buttons
+--------------------------------------------------------------------
+C     : Tum uyarilari onayla / Acknowledge all alerts
+-  /+ : Font boyutunu kucult/buyut / Decrease/increase font size
+^ / v : Paneli acik/kapali (collapse) yap / Expand/collapse the panel
+Baslik cubugu suruklenerek panel tasinir / Drag the title bar to move the panel
+
+by alp-1863530
