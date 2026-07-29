@@ -4,23 +4,23 @@ ShortMetar, EuroScope içerisinde Türk meydanlarının METAR bilgilerini hızl�
 
 ## Komutlar
 
-`.sm all` — Tüm LT* meydanlarının METAR bilgilerini gösterir.
+`.sm all` — **Önerilen komut.** Tüm LT* meydanlarının METAR bilgilerini gösterir.
 
-`.sm used` — Sadece aktif kalkış veya varış trafiği bulunan meydanları gösterir.
+`.sm used` — **Önerilen komut.** Sadece aktif kalkış veya varış trafiği bulunan meydanları gösterir.
 
 `.sm filter LTFM` — İstenilen tek bir meydanı gösterir.
 
 `.sm filter LTFM,LTAW,LTAI` — İstenilen birden fazla meydanı gösterir.
 
-`.sm online` — Bağlı olduğunuz CID'in sorumlu olduğu sektördeki aktif trafiği gösterir.
+`.sm online` — **Önerilen komut.** Bağlı olduğunuz CID'in sorumlu olduğu sektördeki aktif trafiği gösterir.
 
-`.sm online sct ANK_W78_CTR` (kısaca `.sm online sct W78`) — Belirtilen sektördeki aktif trafiği gösterir.
+`.sm online sct ANK_W78` (kısaca `.sm online sct W78`) — Belirtilen sektördeki aktif trafiği gösterir. Bazı pozisyonların kimliği alt çizgi/sayı içermeyen kısa bir kod da olabilir (örn. `ANKC`).
 
 `.sm vatsim` — Veri kaynağını VATSIM olarak değiştirir.
 
-`.sm rasat` — Veri kaynağını MGM RASAT olarak değiştirir (**varsayılan**).
+`.sm rasat` — **Önerilen komut.** Veri kaynağını MGM RASAT olarak değiştirir (**varsayılan**).
 
-`.sm eng` — Dili İngilizce yapar (**varsayılan**).
+`.sm eng` — **Önerilen komut.** Dili İngilizce yapar (**varsayılan**).
 
 `.sm tr` — Dili Türkçe yapar.
 
