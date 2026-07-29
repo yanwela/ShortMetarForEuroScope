@@ -14,7 +14,8 @@ using namespace EuroScopePlugIn;
 CShortMetar* g_pPlugin = nullptr;
 
 // Rasat build id site guncellenince degisebilir; rasat calismayi birakirsa yeni id ile guncelle.
-static const wchar_t* RASAT_BUILD = L"jsy7EZOlC7J2qCSq-y6KU";
+static const wchar_t* RASAT_BUILD = L"T8mkW-IVCJLnn0LMMsebO";
+static const char* RASAT_BUILD_STR = "T8mkW-IVCJLnn0LMMsebO";
 static const char* LT_STATIONS =
 "LTAC,LTAD,LTAE,LTAF,LTAG,LTAH,LTAI,LTAJ,LTAL,LTAN,LTAO,LTAP,LTAR,LTAS,LTAT,LTAU,LTAV,LTAW,LTAY,LTAZ,"
 "LTBA,LTBB,LTBD,LTBE,LTBF,LTBG,LTBH,LTBI,LTBJ,LTBK,LTBL,LTBN,LTBO,LTBP,LTBQ,LTBR,LTBS,LTBT,LTBU,LTBV,LTBX,LTBY,LTBZ,"
@@ -22,7 +23,7 @@ static const char* LT_STATIONS =
 "LTDA,LTDB,LTFA,LTFB,LTFC,LTFD,LTFE,LTFG,LTFH,LTFJ,LTFK,LTFM,LTFO,LTHA,LTHB";
 
 CShortMetar::CShortMetar()
-    : CPlugIn(COMPATIBILITY_CODE, "ShortMetar", "1.0.0", "Alp", "Free to use"),
+    : CPlugIn(COMPATIBILITY_CODE, "ShortMetar", "1.1.0", "Alp", "Free to use"),
     m_IsFetching(false), m_FetchTraffic(false), m_FilterMode(FilterMode::All),
     m_PanelX(80), m_PanelY(80),
     m_Source(Source::Rasat), m_Collapsed(false), m_FontSize(13)
@@ -30,10 +31,16 @@ CShortMetar::CShortMetar()
     g_pPlugin = this;
     LoadFont();
     LoadState();    // SMconfig.json'dan konum/font/kaynak yukle
+    LoadSectorData();   // .ese dosyasindan pozisyon/sektor kapsama verisini yukle
     StartTrafficFetch();
     StartMetarFetch();
-    DisplayUserMessage("ShortMetar", "Sistem",
-        "ShortMetar yuklendi. Acilista tum LT* metarlari lislenedi. Komutlar icin: .sm help",
+    DisplayUserMessage("ShortMetar", L("Sistem", "System"),
+        L("ShortMetar yuklendi. Acilista tum LT* metarlari lislenedi. Komutlar icin: .sm help",
+          "ShortMetar loaded. All LT* metars listed at startup. For commands: .sm help"),
+        true, true, true, false, false);
+    DisplayUserMessage("ShortMetar", L("Sistem", "System"),
+        L(".sm online kullanmak icin once VATSIM'e (EuroScope) baglanin.",
+          "For use .sm online, connect VATSIM (EuroScope) first."),
         true, true, true, false, false);
 }
 
@@ -52,6 +59,7 @@ void CShortMetar::StartMetarFetch()
 {
     if (m_IsFetching) return;
     m_IsFetching = true;
+    m_MetarFetchStartTick = GetTickCount();
     std::thread(&CShortMetar::FetchMetarAsync, this).detach();
 }
 
@@ -59,32 +67,70 @@ void CShortMetar::StartTrafficFetch()
 {
     if (m_FetchTraffic) return;
     m_FetchTraffic = true;
+    m_TrafficFetchStartTick = GetTickCount();
     std::thread(&CShortMetar::FetchTrafficAsync, this).detach();
 }
 
-// MGM ana sayfasindaki __NEXT_DATA__ icinden guncel buildId'yi cek (site guncellense de uyum saglar)
+// Build id'yi calisan /result sayfasindan bul ("/" ana sayfa guvenilir degildi, /result SSR calisiyor)
 std::string CShortMetar::FetchRasatBuild()
 {
-    std::string html = HttpGet(L"rasat.mgm.gov.tr", L"/");
+    std::string html = HttpGet(L"rasat.mgm.gov.tr", L"/result?hours=0&obsType=1&stations=LTFM");
     const std::string key = "\"buildId\":\"";
     size_t p = html.find(key);
-    if (p == std::string::npos) return "";
-    p += key.size();
-    size_t e = html.find('"', p);
-    if (e == std::string::npos) return "";
-    return html.substr(p, e - p);
+    if (p != std::string::npos) {
+        p += key.size();
+        size_t e = html.find('"', p);
+        if (e != std::string::npos) {
+            std::string id = html.substr(p, e - p);
+            if (id.size() > 4) return id;
+        }
+    }
+    return "";   // caller hardcoded RASAT_BUILD'i kullanacak
 }
 
-// METAR'i secili kaynaktan (RASAT id'siz, ICAO ile / VATSIM bulk) ceker
+// /result HTML'inden (veya herhangi bir metinden) ilk "METAR/SPECI LTxx ..." satirini bulup ICAO+ruzgar+QNH ayikla
+static bool ParseMetarLine(const std::string& html, std::string& icao, std::string& wind, std::string& qnh)
+{
+    size_t p = html.find("METAR LT");
+    size_t sp = html.find("SPECI LT");
+    if (sp != std::string::npos && (p == std::string::npos || sp < p)) p = sp;
+    if (p == std::string::npos) return false;
+    size_t e = p;
+    while (e < html.size() && e < p + 300 && html[e] != '<' && html[e] != '\n' && html[e] != '\r') e++;
+    std::string text = html.substr(p, e - p);
+
+    std::stringstream ls(text);
+    std::string tok; icao.clear(); wind = "-"; qnh = "-"; bool haveIcao = false;
+    while (ls >> tok) {
+        if (tok == "METAR" || tok == "SPECI") continue;
+        if (!haveIcao) { if (tok.size() == 4 && tok.rfind("LT", 0) == 0) { icao = tok; haveIcao = true; } continue; }
+        if (wind == "-" && tok.size() >= 5 && tok.size() <= 11 && tok.substr(tok.size() - 2) == "KT") wind = tok;
+        else if (qnh == "-" && tok.size() == 5 && tok[0] == 'Q') qnh = tok;
+    }
+    return haveIcao;
+}
+
+// METAR'i secili kaynaktan ceker (RASAT: /result HTML sayfasi, build id gerekmez / VATSIM: bulk)
 void CShortMetar::FetchMetarAsync()
 {
     try {
         if (m_Source == Source::Rasat) {
-            std::string build = FetchRasatBuild();
-            std::wstring wbuild = build.empty()
+            // build id'yi onbellekten kullan; yoksa bir kez kesfet ve onbellege al (her fetch'te tekrar cekmesin)
+            if (m_CachedRasatBuild.empty()) {
+                m_CachedRasatBuild = FetchRasatBuild();
+                std::string dbg = PluginDir() + "SM_rasat_buildid.txt";
+                FILE* fp = nullptr;
+                if (fopen_s(&fp, dbg.c_str(), "w") == 0 && fp) {
+                    fprintf(fp, "discovered=%s\nfallback=%s\nusing=%s\n",
+                        m_CachedRasatBuild.empty() ? "(bulunamadi)" : m_CachedRasatBuild.c_str(),
+                        RASAT_BUILD_STR,
+                        m_CachedRasatBuild.empty() ? RASAT_BUILD_STR : m_CachedRasatBuild.c_str());
+                    fclose(fp);
+                }
+            }
+            std::wstring wbuild = m_CachedRasatBuild.empty()
                 ? std::wstring(RASAT_BUILD)
-                : std::wstring(build.begin(), build.end());
-            // ICAO listesini parcala (qs arrayLimit; guvenli icin 10'arlik gruplar, paralel istek)
+                : std::wstring(m_CachedRasatBuild.begin(), m_CachedRasatBuild.end());
             std::vector<std::string> all;
             {
                 std::string s = LT_STATIONS; size_t st = 0;
@@ -94,6 +140,9 @@ void CShortMetar::FetchMetarAsync()
                     if (c == std::string::npos) break; st = c + 1;
                 }
             }
+            // _next/data/<buildId>/result.json istek basina EN FAZLA 10 istasyonu doner;
+            // fazlasi istenirse 11.'den itibaren SESSIZCE (hatasiz) dusuyor. 20 ile test edildiginde
+            // her grubun yarisi hic gelmiyordu -> CHUNK 10'a sabitlendi.
             const size_t CHUNK = 10;
             std::vector<std::wstring> paths;
             for (size_t i = 0; i < all.size(); i += CHUNK) {
@@ -102,21 +151,27 @@ void CShortMetar::FetchMetarAsync()
                     if (!all[j].empty()) q += L"&stations=" + std::wstring(all[j].begin(), all[j].end());
                 paths.push_back(L"/_next/data/" + wbuild + L"/result.json?obsType=1&hours=0" + q);
             }
-            // tum gruplari AYNI ANDA (paralel) iste, hepsi gelince parse et
+            // NO_PROXY sonrasi tek baglanti yeterince hizli; paralel worker'lar bazi gruplarin
+            // sessizce bos donmesine (MGM tarafi es zamanli baglanti kisitlamasi olabilir) yol aciyordu.
+            // Tum gruplari TEK baglanti uzerinden sirayla cek -> hicbiri atlanmaz.
             std::vector<std::string> results(paths.size());
-            std::vector<std::thread> ths;
-            for (size_t k = 0; k < paths.size(); ++k)
-                ths.emplace_back([this, &results, &paths, k]() { results[k] = HttpGet(L"rasat.mgm.gov.tr", paths[k].c_str()); });
-            for (auto& t : ths) t.join();
+            HttpGetMulti(L"rasat.mgm.gov.tr", paths, results, 0);
             bool any = false;
-            for (auto& r : results) if (!r.empty()) { ParseRasat(r); any = true; }
-            if (any) DisplayUserMessage("ShortMetar", "RASAT", "RASAT guncellendi.", true, true, true, false, false);
-            else     DisplayUserMessage("ShortMetar", "RASAT", "RASAT cekilemedi.", true, true, true, false, false);
+            int emptyCount = 0;
+            for (auto& r : results) { if (!r.empty()) { ParseRasat(r); any = true; } else emptyCount++; }
+            if (any) {
+                char msg[96]; sprintf_s(msg, L("RASAT guncellendi (%d/%d grup bos).", "RASAT updated (%d/%d groups empty)."), emptyCount, (int)results.size());
+                DisplayUserMessage("ShortMetar", "RASAT", emptyCount > 0 ? msg : L("RASAT guncellendi.", "RASAT updated."), true, true, true, false, false);
+            }
+            else {
+                DisplayUserMessage("ShortMetar", "RASAT", L("RASAT cekilemedi.", "RASAT fetch failed."), true, true, true, false, false);
+                m_CachedRasatBuild.clear();   // basarisizsa onbellegi temizle, bir sonrakinde yeniden kesfetsin
+            }
         }
         else {
             std::string metar = HttpGet(L"metar.vatsim.net", L"/LT");
-            if (!metar.empty()) { ParseBulkMetar(metar); DisplayUserMessage("ShortMetar", "VATSIM", "METAR guncellendi.", true, true, true, false, false); }
-            else DisplayUserMessage("ShortMetar", "VATSIM", "Veri cekilemedi.", true, true, true, false, false);
+            if (!metar.empty()) { ParseBulkMetar(metar); DisplayUserMessage("ShortMetar", "VATSIM", L("METAR guncellendi.", "METAR updated."), true, true, true, false, false); }
+            else DisplayUserMessage("ShortMetar", "VATSIM", L("Veri cekilemedi.", "Data fetch failed."), true, true, true, false, false);
         }
     }
     catch (...) {}
@@ -152,8 +207,9 @@ void CShortMetar::SaveState()
     FILE* fp = nullptr;
     if (fopen_s(&fp, path.c_str(), "w") == 0 && fp) {
         const char* src = (m_Source == Source::Vatsim) ? "vatsim" : "rasat";
-        fprintf(fp, "{\n  \"x\": %d,\n  \"y\": %d,\n  \"fontSize\": %d,\n  \"source\": \"%s\"\n}\n",
-            m_PanelX, m_PanelY, m_FontSize, src);
+        const char* lang = (m_Language == Language::Turkish) ? "tr" : "eng";
+        fprintf(fp, "{\n  \"x\": %d,\n  \"y\": %d,\n  \"fontSize\": %d,\n  \"source\": \"%s\",\n  \"language\": \"%s\"\n}\n",
+            m_PanelX, m_PanelY, m_FontSize, src, lang);
         fclose(fp);
     }
 }
@@ -189,6 +245,9 @@ void CShortMetar::LoadState()
     std::string src = readStr("source");
     if (src == "vatsim") m_Source = Source::Vatsim;
     else                 m_Source = Source::Rasat;   // varsayilan rasat
+    std::string lang = readStr("language");
+    if (lang == "tr") m_Language = Language::Turkish;
+    else              m_Language = Language::English;   // varsayilan ingilizce
 }
 
 // EuroScope.ttf'yi DLL'in yanindan ozel font olarak yukle (DLL ile ayni klasore koy)
@@ -204,9 +263,173 @@ void CShortMetar::AcknowledgeAll()
     for (auto& kv : m_MetarData) kv.second.alert = 0;
 }
 
+// Basit satir okuyucu: \r ve bastaki/sondaki bosluklari temizler
+static std::string TrimLine(const std::string& s)
+{
+    size_t a = 0, b = s.size();
+    while (b > a && (s[b - 1] == '\r' || s[b - 1] == '\n' || s[b - 1] == ' ' || s[b - 1] == '\t')) b--;
+    while (a < b && (s[a] == ' ' || s[a] == '\t')) a++;
+    return s.substr(a, b - a);
+}
+
+// Verilen klasorde ilk *.ese dosyasini bulur (AIRAC surumune gore dosya adi degisir, o yuzden sabit ad aranmaz)
+static std::string FindFirstEseFileIn(const std::string& dir)
+{
+    std::string pattern = dir + "*.ese";
+    WIN32_FIND_DATAA fd;
+    HANDLE h = FindFirstFileA(pattern.c_str(), &fd);
+    if (h == INVALID_HANDLE_VALUE) return "";
+    std::string name = fd.cFileName;
+    FindClose(h);
+    return dir + name;
+}
+
+// AIRAC paketi genelde <kok>\LTXX\Plugins\ShortMetar\ (=PluginDir()) altinda calisir; .ese ise LTXX klasorunun
+// ICINDE degil, <kok>\ altinda (LTXX ile ayni seviyede) durur -> PluginDir()'den 3 ust dizin. Kok klasor adi
+// kullanicidan kullaniciya degistigi icin sirayla PluginDir(), 1, 2 ve 3 ust dizin denenir.
+static std::string FindFirstEseFile(const std::string& pluginDir)
+{
+    std::string found = FindFirstEseFileIn(pluginDir);
+    if (!found.empty()) return found;
+    found = FindFirstEseFileIn(pluginDir + "..\\");
+    if (!found.empty()) return found;
+    found = FindFirstEseFileIn(pluginDir + "..\\..\\");
+    if (!found.empty()) return found;
+    return FindFirstEseFileIn(pluginDir + "..\\..\\..\\");
+}
+
+// .ese dosyasindan [POSITIONS] (callsign->kisa kimlik) ve [AIRSPACE] (SECTOR/OWNER/DEPAPT/ARRAPT) verisini yukler.
+// Boylece "hangi pozisyon (orn. W78) hangi meydanlardan sorumlu" gercek sektor verisinden (poligon hesabi olmadan) cikarilir.
+// Tanı: PluginDir(), bulunan .ese yolu ve parse sonrasi sayilari SM_sector_debug.txt'ye yazar (sorun tespiti icin)
+static void WriteSectorDebug(const std::string& pluginDir, const std::string& esePath, size_t posCount, size_t covCount)
+{
+    std::string dbg = pluginDir + "SM_sector_debug.txt";
+    FILE* fp = nullptr;
+    if (fopen_s(&fp, dbg.c_str(), "w") == 0 && fp) {
+        fprintf(fp, "pluginDir=%s\nesePath=%s\npositions=%zu\nsectorIdentifiers=%zu\n",
+            pluginDir.c_str(), esePath.empty() ? "(bulunamadi)" : esePath.c_str(), posCount, covCount);
+        fclose(fp);
+    }
+}
+
+void CShortMetar::LoadSectorData()
+{
+    if (m_SectorDataLoaded) return;
+    std::string dir = PluginDir();
+    std::string path = FindFirstEseFile(dir);
+    if (path.empty()) { WriteSectorDebug(dir, path, 0, 0); return; }
+    FILE* fp = nullptr;
+    if (fopen_s(&fp, path.c_str(), "rb") != 0 || !fp) { WriteSectorDebug(dir, path, 0, 0); return; }
+    std::string content; char b[8192]; size_t n;
+    while ((n = fread(b, 1, sizeof(b), fp)) > 0) content.append(b, n);
+    fclose(fp);
+
+    std::stringstream ss(content);
+    std::string line;
+    std::string section;
+    std::vector<std::string> curOwners;
+    std::set<std::string> curApts;
+    bool inBlock = false;
+
+    auto flushBlock = [&]() {
+        for (auto& id : curOwners) m_SectorCoverage[id].insert(curApts.begin(), curApts.end());
+        curOwners.clear(); curApts.clear(); inBlock = false;
+        };
+
+    while (std::getline(ss, line)) {
+        line = TrimLine(line);
+        if (line.empty()) { if (inBlock) flushBlock(); continue; }
+        if (line[0] == '[') { if (inBlock) flushBlock(); section = line; continue; }
+        if (line[0] == ';') continue;
+
+        if (section == "[POSITIONS]") {
+            // CALLSIGN:REALNAME:FREQ:IDENT:SUFFIX:PREFIX:FACILITY:...
+            size_t c1 = line.find(':'); if (c1 == std::string::npos) continue;
+            size_t c2 = line.find(':', c1 + 1); if (c2 == std::string::npos) continue;
+            size_t c3 = line.find(':', c2 + 1); if (c3 == std::string::npos) continue;
+            size_t c4 = line.find(':', c3 + 1);
+            size_t c5 = (c4 == std::string::npos) ? std::string::npos : line.find(':', c4 + 1);
+            size_t c6 = (c5 == std::string::npos) ? std::string::npos : line.find(':', c5 + 1);
+            std::string callsign = line.substr(0, c1);
+            std::string ident = line.substr(c3 + 1, (c4 == std::string::npos ? line.size() : c4) - c3 - 1);
+            std::transform(callsign.begin(), callsign.end(), callsign.begin(), ::toupper);
+            if (!callsign.empty() && !ident.empty()) m_PositionIdentifier[callsign] = ident;
+            if (!ident.empty() && c5 != std::string::npos) {
+                std::string prefix = line.substr(c5 + 1, (c6 == std::string::npos ? line.size() : c6) - c5 - 1);
+                if (!prefix.empty()) m_PositionAirportHint[ident] = prefix;
+            }
+            continue;
+        }
+
+        if (section == "[AIRSPACE]") {
+            if (line.rfind("SECTOR:", 0) == 0) {
+                if (inBlock) flushBlock();
+                inBlock = true;
+                continue;
+            }
+            if (!inBlock) continue;
+            if (line.rfind("OWNER:", 0) == 0) {
+                std::stringstream os(line.substr(6)); std::string id;
+                while (std::getline(os, id, ':')) if (!id.empty()) curOwners.push_back(id);
+                continue;
+            }
+            if (line.rfind("DEPAPT:", 0) == 0 || line.rfind("ARRAPT:", 0) == 0) {
+                std::string apt = line.substr(line.find(':') + 1);
+                if (apt.size() == 4) curApts.insert(apt);
+                continue;
+            }
+            // BORDER/DISPLAY/diger satirlar: kapsama hesabi icin gerek yok, yoksay
+        }
+    }
+    if (inBlock) flushBlock();
+    m_SectorDataLoaded = true;
+    WriteSectorDebug(dir, path, m_PositionIdentifier.size(), m_SectorCoverage.size());
+}
+
+// Bir kimligin kapsadigi meydanlari dondurur: once OWNER zincirinden gelen gercek sektor kapsami,
+// bosa (orn. FMP/ATIS gibi hava sahasi sahiplenmeyen pozisyonlar) ise PREFIX alanindaki tek meydana duser.
+std::set<std::string> CShortMetar::ResolveSectorAirports(const std::string& identifier) const
+{
+    auto it = m_SectorCoverage.find(identifier);
+    if (it != m_SectorCoverage.end() && !it->second.empty()) return it->second;
+    auto itHint = m_PositionAirportHint.find(identifier);
+    if (itHint != m_PositionAirportHint.end() && itHint->second.size() == 4 && itHint->second.rfind("LT", 0) == 0)
+        return { itHint->second };
+    return {};
+}
+
+// Aktif online/sct filtresini (own=kendi pozisyonum ya da sabit bir kimlik) gecerli kapsama verisinden yeniden hesaplar.
+void CShortMetar::RecomputeOnlineFilter()
+{
+    std::string identifier = m_OnlineIdentifier;
+    if (m_OnlineIsOwn) {
+        EuroScopePlugIn::CController me = ControllerMyself();
+        if (!me.IsValid()) return;
+        std::string cs = me.GetCallsign();
+        std::transform(cs.begin(), cs.end(), cs.begin(), ::toupper);
+        auto it = m_PositionIdentifier.find(cs);
+        if (it == m_PositionIdentifier.end()) return;
+        identifier = it->second;
+    }
+    std::set<std::string> coverage = ResolveSectorAirports(identifier);
+    std::lock_guard<std::mutex> lock(m_DataMutex);
+    m_OnlineAirports = std::move(coverage);
+}
+
 void CShortMetar::OnTimer(int Counter)
 {
     UNREFERENCED_PARAMETER(Counter);
+    // Watchdog: bir cekim 15 saniyeden uzun surerse (donmus/crash olmus olabilir) bayragi zorla birak
+    DWORD now = GetTickCount();
+    if (m_IsFetching && m_MetarFetchStartTick != 0 && (now - m_MetarFetchStartTick) > 35000) {
+        m_IsFetching = false;
+        DisplayUserMessage("ShortMetar", L("Uyari", "Warning"), L("METAR cekimi takildi, sifirlandi. Tekrar deneniyor...", "METAR fetch got stuck, reset. Retrying..."), true, true, true, false, false);
+        StartMetarFetch();
+    }
+    if (m_FetchTraffic && m_TrafficFetchStartTick != 0 && (now - m_TrafficFetchStartTick) > 15000) {
+        m_FetchTraffic = false;
+    }
+
     SYSTEMTIME st; GetSystemTime(&st);
     if (st.wSecond == 0) {
         int m = st.wMinute;
@@ -218,21 +441,28 @@ void CShortMetar::OnTimer(int Counter)
     }
     // Trafik: her 2 dakikada bir (Counter saniyedir)
     if (Counter % 120 == 0) StartTrafficFetch();
+    // Online/sct filtresini tazele: 30 saniyede bir (sadece Online modunda; "own" ise CID/pozisyon degisimini yakalar)
+    if (m_FilterMode == FilterMode::Online && Counter % 30 == 0) RecomputeOnlineFilter();
 }
 
 void CShortMetar::ShowHelp()
 {
-    DisplayUserMessage("ShortMetar", "Yardim", ".sm all         -> TUM LT* meydan metarlari", true, true, true, false, false);
-    DisplayUserMessage("ShortMetar", "Yardim", ".sm used        -> aktif trafik (kalkis+varis birlikte)", true, true, true, false, false);
-    DisplayUserMessage("ShortMetar", "Yardim", ".sm filter ICAO -> tek meydan (orn .sm filter LTFM veya LTFM,LTAW,LTAI...)", true, true, true, false, false);
-    DisplayUserMessage("ShortMetar", "Yardim", ".sm vatsim      -> kaynak VATSIM (varsayilan)", true, true, true, false, false);
-    DisplayUserMessage("ShortMetar", "Yardim", ".sm rasat       -> kaynak RASAT (MGM)", true, true, true, false, false);
-    DisplayUserMessage("ShortMetar", "Yardim", ".sm ack              -> tum sari uyarilari onayla (C butonu da ayni)", true, true, true, false, false);
-    DisplayUserMessage("ShortMetar", "Yardim", ".sm refresh          -> METAR'i hemen guncelle", true, true, true, false, false);
-    DisplayUserMessage("ShortMetar", "Yardim", ".sm refresh airport  -> trafik listesini hemen guncelle", true, true, true, false, false);
-    DisplayUserMessage("ShortMetar", "Yardim", ".sm save             -> konum+font'u SMconfig.json'a kaydet", true, true, true, false, false);
-    DisplayUserMessage("ShortMetar", "Yardim", ".sm reload           -> SMconfig.json'u yeniden yukle", true, true, true, false, false);
-    DisplayUserMessage("ShortMetar", "Yardim", ".sm chatbox          -> panel gizliyse tekrar ac", true, true, true, false, false);
+    const char* tag = L("Yardim", "Help");
+    DisplayUserMessage("ShortMetar", tag, L(".sm all         -> TUM LT* meydan metarlari", ".sm all         -> ALL LT* airport metars"), true, true, true, false, false);
+    DisplayUserMessage("ShortMetar", tag, L(".sm used        -> aktif trafik (kalkis+varis birlikte)", ".sm used        -> active traffic (departures+arrivals combined)"), true, true, true, false, false);
+    DisplayUserMessage("ShortMetar", tag, L(".sm online      -> kendi CID'inizin bagli oldugu sektordeki aktif trafik", ".sm online      -> active traffic in the sector your CID is currently connected to"), true, true, true, false, false);
+    DisplayUserMessage("ShortMetar", tag, L(".sm online sct ANK_W78_CTR (veya kisaca W78) -> belirli bir sektordeki aktif trafik", ".sm online sct ANK_W78_CTR (or short form W78) -> active traffic in a specific sector"), true, true, true, false, false);
+    DisplayUserMessage("ShortMetar", tag, L(".sm filter ICAO -> tek meydan (orn .sm filter LTFM veya LTFM,LTAW,LTAI...)", ".sm filter ICAO -> single airport (e.g. .sm filter LTFM or LTFM,LTAW,LTAI...)"), true, true, true, false, false);
+    DisplayUserMessage("ShortMetar", tag, L(".sm vatsim      -> kaynak VATSIM (varsayilan)", ".sm vatsim      -> source VATSIM (default)"), true, true, true, false, false);
+    DisplayUserMessage("ShortMetar", tag, L(".sm rasat       -> kaynak RASAT (MGM)", ".sm rasat       -> source RASAT (MGM)"), true, true, true, false, false);
+    DisplayUserMessage("ShortMetar", tag, L(".sm eng              -> dili Ingilizce yap (varsayilan)", ".sm eng              -> switch language to English (default)"), true, true, true, false, false);
+    DisplayUserMessage("ShortMetar", tag, L(".sm tr               -> dili Turkce yap", ".sm tr               -> switch language to Turkish"), true, true, true, false, false);
+    DisplayUserMessage("ShortMetar", tag, L(".sm ack              -> tum sari uyarilari onayla (C butonu da ayni)", ".sm ack              -> acknowledge all yellow alerts (C button does the same)"), true, true, true, false, false);
+    DisplayUserMessage("ShortMetar", tag, L(".sm refresh          -> METAR'i hemen guncelle", ".sm refresh          -> update METAR now"), true, true, true, false, false);
+    DisplayUserMessage("ShortMetar", tag, L(".sm refresh airport  -> trafik listesini hemen guncelle", ".sm refresh airport  -> update traffic list now"), true, true, true, false, false);
+    DisplayUserMessage("ShortMetar", tag, L(".sm save             -> konum+font'u SMconfig.json'a kaydet", ".sm save             -> save position+font to SMconfig.json"), true, true, true, false, false);
+    DisplayUserMessage("ShortMetar", tag, L(".sm reload           -> SMconfig.json'u yeniden yukle", ".sm reload           -> reload SMconfig.json"), true, true, true, false, false);
+    DisplayUserMessage("ShortMetar", tag, L(".sm chatbox          -> panel gizliyse tekrar ac", ".sm chatbox          -> reopen panel if hidden"), true, true, true, false, false);
 }
 
 bool CShortMetar::OnCompileCommand(const char* sCommandLine)
@@ -246,38 +476,87 @@ bool CShortMetar::OnCompileCommand(const char* sCommandLine)
     rest = (sp == std::string::npos) ? "" : rest.substr(sp);
 
     if (rest.empty() || rest == "help") { ShowHelp(); return true; }
-    if (rest == "show" || rest == "chatbox") { m_Collapsed = false; DisplayUserMessage("ShortMetar", "Panel", "Acildi.", true, true, true, false, false); return true; }
-    if (rest == "save") { SaveState(); DisplayUserMessage("ShortMetar", "Config", "Konum ve font kaydedildi (SMconfig.json).", true, true, true, false, false); return true; }
-    if (rest == "reload") { LoadState(); DisplayUserMessage("ShortMetar", "Config", "SMconfig.json yeniden yuklendi.", true, true, true, false, false); return true; }
-    if (rest == "ack") { AcknowledgeAll(); DisplayUserMessage("ShortMetar", "ACK", "Tum uyarilar onaylandi.", true, true, true, false, false); return true; }
-    if (rest == "refresh") { StartMetarFetch(); DisplayUserMessage("ShortMetar", "VATSIM", "METAR guncelleniyor...", true, true, true, false, false); return true; }
-    if (rest == "refresh airport") { StartTrafficFetch(); DisplayUserMessage("ShortMetar", "VATSIM", "Trafik guncelleniyor...", true, true, true, false, false); return true; }
-    if (rest == "all") { m_FilterMode = FilterMode::All;  DisplayUserMessage("ShortMetar", "Filtre", "Tum LT* meydanlar.", true, true, true, false, false); return true; }
-    if (rest == "used") { m_FilterMode = FilterMode::Used; DisplayUserMessage("ShortMetar", "Filtre", "Aktif trafik (kalkis+varis).", true, true, true, false, false); return true; }
-    if (rest == "vatsim") { m_Source = Source::Vatsim; SaveState(); StartMetarFetch(); DisplayUserMessage("ShortMetar", "Kaynak", "VATSIM.", true, true, true, false, false); return true; }
-    if (rest == "rasat") { m_Source = Source::Rasat;  SaveState(); StartMetarFetch(); DisplayUserMessage("ShortMetar", "Kaynak", "RASAT (MGM).", true, true, true, false, false); return true; }
+    if (rest == "show" || rest == "chatbox") { m_Collapsed = false; DisplayUserMessage("ShortMetar", L("Panel", "Panel"), L("Acildi.", "Opened."), true, true, true, false, false); return true; }
+    if (rest == "save") { SaveState(); DisplayUserMessage("ShortMetar", L("Config", "Config"), L("Konum ve font kaydedildi (SMconfig.json).", "Position and font saved (SMconfig.json)."), true, true, true, false, false); return true; }
+    if (rest == "reload") { LoadState(); DisplayUserMessage("ShortMetar", L("Config", "Config"), L("SMconfig.json yeniden yuklendi.", "SMconfig.json reloaded."), true, true, true, false, false); return true; }
+    if (rest == "ack") { AcknowledgeAll(); DisplayUserMessage("ShortMetar", "ACK", L("Tum uyarilar onaylandi.", "All alerts acknowledged."), true, true, true, false, false); return true; }
+    if (rest == "eng") { m_Language = Language::English; SaveState(); DisplayUserMessage("ShortMetar", "Language", "English.", true, true, true, false, false); return true; }
+    if (rest == "tr") { m_Language = Language::Turkish; SaveState(); DisplayUserMessage("ShortMetar", "Dil", "Turkce.", true, true, true, false, false); return true; }
+    if (rest == "refresh") {
+        StartMetarFetch();
+        const char* srcTag = (m_Source == Source::Rasat) ? "RASAT" : "VATSIM";
+        DisplayUserMessage("ShortMetar", srcTag, L("METAR guncelleniyor...", "Updating METAR..."), true, true, true, false, false);
+        return true;
+    }
+    if (rest == "refresh airport") { StartTrafficFetch(); DisplayUserMessage("ShortMetar", "VATSIM", L("Trafik guncelleniyor...", "Updating traffic..."), true, true, true, false, false); return true; }
+    if (rest == "all") { m_FilterMode = FilterMode::All;  DisplayUserMessage("ShortMetar", L("Filtre", "Filter"), L("Tum LT* meydanlar.", "All LT* airports."), true, true, true, false, false); return true; }
+    if (rest == "used") { m_FilterMode = FilterMode::Used; DisplayUserMessage("ShortMetar", L("Filtre", "Filter"), L("Aktif trafik (kalkis+varis).", "Active traffic (departures+arrivals)."), true, true, true, false, false); return true; }
+    if (rest == "online" || rest.rfind("online ", 0) == 0) {
+        std::vector<std::string> toks; { std::stringstream ts(rest); std::string t; while (ts >> t) toks.push_back(t); }
+        bool named = toks.size() >= 3 && toks[1] == "sct";
+        std::string arg;
+        if (named) {
+            arg = toks[2];
+            std::transform(arg.begin(), arg.end(), arg.begin(), ::toupper);
+        }
+        std::string identifier;
+        if (named) {
+            auto itPos = m_PositionIdentifier.find(arg);
+            identifier = (itPos != m_PositionIdentifier.end()) ? itPos->second : arg;
+        }
+        else {
+            EuroScopePlugIn::CController me = ControllerMyself();
+            if (!me.IsValid()) {
+                DisplayUserMessage("ShortMetar", L("Hata", "Error"), L("Bagli degilsiniz.", "You are not connected."), true, true, true, false, false);
+                return true;
+            }
+            std::string cs = me.GetCallsign();
+            std::transform(cs.begin(), cs.end(), cs.begin(), ::toupper);
+            auto itPos = m_PositionIdentifier.find(cs);
+            if (itPos == m_PositionIdentifier.end()) {
+                DisplayUserMessage("ShortMetar", L("Hata", "Error"), L("Pozisyonunuz sektor verisinde bulunamadi.", "Your position wasn't found in sector data."), true, true, true, false, false);
+                return true;
+            }
+            identifier = itPos->second;
+        }
+        std::set<std::string> coverage = ResolveSectorAirports(identifier);
+        if (coverage.empty()) {
+            char msg[128]; sprintf_s(msg, L("Sektor bulunamadi: %s", "Sector not found: %s"), identifier.c_str());
+            DisplayUserMessage("ShortMetar", L("Hata", "Error"), msg, true, true, true, false, false);
+            return true;
+        }
+        m_OnlineIsOwn = !named;
+        m_OnlineIdentifier = identifier;
+        m_FilterMode = FilterMode::Online;
+        RecomputeOnlineFilter();
+        char msg[128]; sprintf_s(msg, L("Sektor %s: %d meydan.", "Sector %s: %d airports."), identifier.c_str(), (int)m_OnlineAirports.size());
+        DisplayUserMessage("ShortMetar", L("Filtre", "Filter"), msg, true, true, true, false, false);
+        return true;
+    }
+    if (rest == "vatsim") { m_Source = Source::Vatsim; SaveState(); StartMetarFetch(); DisplayUserMessage("ShortMetar", L("Kaynak", "Source"), "VATSIM.", true, true, true, false, false); return true; }
+    if (rest == "rasat") { m_Source = Source::Rasat;  SaveState(); StartMetarFetch(); DisplayUserMessage("ShortMetar", L("Kaynak", "Source"), "RASAT (MGM).", true, true, true, false, false); return true; }
     if (rest.rfind("filter", 0) == 0) {
         std::string rr = raw.substr(3);
         size_t a = rr.find("filter"); std::string arg = (a == std::string::npos) ? "" : rr.substr(a + 6);
         // bosluk/tab at, buyuk harfe cevir
         std::string clean;
         for (char c : arg) if (c != ' ' && c != '\t') clean += (char)::toupper((unsigned char)c);
-        if (clean.empty()) { DisplayUserMessage("ShortMetar", "Hata", "Kullanim: .sm filter LTFM  veya  .sm filter LTFM,LTAW,LTAI", true, true, true, false, false); return true; }
+        if (clean.empty()) { DisplayUserMessage("ShortMetar", L("Hata", "Error"), L("Kullanim: .sm filter LTFM  veya  .sm filter LTFM,LTAW,LTAI", "Usage: .sm filter LTFM  or  .sm filter LTFM,LTAW,LTAI"), true, true, true, false, false); return true; }
         m_FilterIcaos.clear();
         std::stringstream fs(clean); std::string item;
         while (std::getline(fs, item, ',')) if (!item.empty()) m_FilterIcaos.insert(item);
         m_FilterMode = FilterMode::SingleIcao;
-        DisplayUserMessage("ShortMetar", "Filtre", (clean + " gosteriliyor.").c_str(), true, true, true, false, false);
+        DisplayUserMessage("ShortMetar", L("Filtre", "Filter"), (clean + L(" gosteriliyor.", " shown.")).c_str(), true, true, true, false, false);
         return true;
     }
-    DisplayUserMessage("ShortMetar", "Hata", "Bilinmeyen komut. .sm help", true, true, true, false, false);
+    DisplayUserMessage("ShortMetar", L("Hata", "Error"), L("Bilinmeyen komut. .sm help", "Unknown command. .sm help"), true, true, true, false, false);
     return true;
 }
 
 std::string CShortMetar::HttpGet(const wchar_t* host, const wchar_t* path, bool https)
 {
     std::string result;
-    HINTERNET hSes = WinHttpOpen(L"ShortMetarPlugin/1.0", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+    HINTERNET hSes = WinHttpOpen(L"ShortMetarPlugin/1.0", WINHTTP_ACCESS_TYPE_NO_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
     if (!hSes) return result;
     WinHttpSetTimeouts(hSes, 8000, 8000, 8000, 8000);   // takilmayi onle: resolve/connect/send/receive 8sn
     HINTERNET hCon = WinHttpConnect(hSes, host, https ? INTERNET_DEFAULT_HTTPS_PORT : INTERNET_DEFAULT_HTTP_PORT, 0);
@@ -301,6 +580,37 @@ std::string CShortMetar::HttpGet(const wchar_t* host, const wchar_t* path, bool 
     return result;
 }
 
+// Ayni sunucuya birden fazla istegi TEK baglanti (session+connect, keep-alive) uzerinden sirayla cek.
+// Her istekte yeniden TLS el sikismasi yapmaktan cok daha hizli.
+void CShortMetar::HttpGetMulti(const wchar_t* host, const std::vector<std::wstring>& paths, std::vector<std::string>& outResults, size_t startIdx, bool https)
+{
+    HINTERNET hSes = WinHttpOpen(L"ShortMetarPlugin/1.0", WINHTTP_ACCESS_TYPE_NO_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+    if (!hSes) return;
+    WinHttpSetTimeouts(hSes, 8000, 8000, 8000, 8000);
+    HINTERNET hCon = WinHttpConnect(hSes, host, https ? INTERNET_DEFAULT_HTTPS_PORT : INTERNET_DEFAULT_HTTP_PORT, 0);
+    if (hCon) {
+        for (size_t i = 0; i < paths.size(); ++i) {
+            std::string result;
+            HINTERNET hReq = WinHttpOpenRequest(hCon, L"GET", paths[i].c_str(), NULL, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, https ? WINHTTP_FLAG_SECURE : 0);
+            if (hReq) {
+                if (WinHttpSendRequest(hReq, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, 0, 0) && WinHttpReceiveResponse(hReq, NULL)) {
+                    DWORD sz = 0;
+                    do {
+                        if (WinHttpQueryDataAvailable(hReq, &sz) && sz > 0) {
+                            std::vector<char> buf(sz + 1, 0); DWORD rd = 0;
+                            if (WinHttpReadData(hReq, buf.data(), sz, &rd)) result.append(buf.data(), rd);
+                        }
+                    } while (sz > 0);
+                }
+                WinHttpCloseHandle(hReq);
+            }
+            outResults[startIdx + i] = std::move(result);
+        }
+        WinHttpCloseHandle(hCon);
+    }
+    WinHttpCloseHandle(hSes);
+}
+
 // Rasat (MGM) Next.js veri endpoint'i. NOT: build id site guncellenince degisebilir;
 // RASAT cevabindaki her "observationText":"METAR ... " icinden ICAO+ruzgar+QNH ayikla.
 void CShortMetar::ParseRasat(const std::string& raw)
@@ -320,8 +630,8 @@ void CShortMetar::ParseRasat(const std::string& raw)
         while (ls >> tok) {
             if (tok == "METAR" || tok == "SPECI") continue;
             if (!haveIcao) { if (tok.size() == 4 && tok.rfind("LT", 0) == 0) { icao = tok; haveIcao = true; } continue; }
-            if (wind == "-" && tok.size() >= 5 && tok.substr(tok.size() - 2) == "KT") wind = tok;
-            else if (tok.size() == 5 && tok[0] == 'Q') qnh = tok;
+            if (wind == "-" && tok.size() >= 5 && tok.size() <= 11 && tok.substr(tok.size() - 2) == "KT") wind = tok;
+            else if (qnh == "-" && tok.size() == 5 && tok[0] == 'Q') qnh = tok;
         }
         if (!haveIcao) continue;
         auto it = m_MetarData.find(icao);
@@ -377,8 +687,8 @@ void CShortMetar::ParseBulkMetar(const std::string& raw)
         std::string tok, icao, wind = "-", qnh = "-"; bool first = true;
         while (ls >> tok) {
             if (first) { icao = tok; first = false; continue; }
-            if (tok.find("KT") != std::string::npos) wind = tok;
-            else if (tok.size() == 5 && tok[0] == 'Q') qnh = tok;
+            if (wind == "-" && tok.size() >= 5 && tok.size() <= 11 && tok.substr(tok.size() - 2) == "KT") wind = tok;
+            else if (qnh == "-" && tok.size() == 5 && tok[0] == 'Q') qnh = tok;
         }
         if (icao.empty()) continue;
         auto it = m_MetarData.find(icao);
@@ -428,6 +738,7 @@ void CMyRadarScreen::OnRefresh(HDC hDC, int Phase)
         auto& deps = g_pPlugin->GetDepAirports();
         auto& arrs = g_pPlugin->GetArrAirports();
         auto& newTraf = g_pPlugin->GetNewTraffic();
+        auto& online = g_pPlugin->GetOnlineAirports();
         auto  mode = g_pPlugin->GetFilterMode();
         auto& fset = g_pPlugin->GetFilterIcaos();
         dataEmpty = metar.empty();
@@ -440,6 +751,7 @@ void CMyRadarScreen::OnRefresh(HDC hDC, int Phase)
             const std::string& icao = kv.first; bool show;
             switch (mode) {
             case CShortMetar::FilterMode::Used:       show = deps.count(icao) > 0 || arrs.count(icao) > 0; break;
+            case CShortMetar::FilterMode::Online:     show = online.count(icao) > 0 && (deps.count(icao) > 0 || arrs.count(icao) > 0); break;
             case CShortMetar::FilterMode::SingleIcao: show = fset.count(icao) > 0; break;
             default:                                  show = true;
             }
@@ -447,7 +759,7 @@ void CMyRadarScreen::OnRefresh(HDC hDC, int Phase)
         }
     }
     std::string note;
-    if (rows.empty()) note = dataEmpty ? "Veri cekiliyor..." : "[Filtreye uyan meydan yok]";
+    if (rows.empty()) note = dataEmpty ? g_pPlugin->L("Veri cekiliyor...", "Fetching data...") : g_pPlugin->L("[Filtreye uyan meydan yok]", "[No airport matches filter]");
 
     int contentW = 0;
     for (auto& r : rows) { std::string s = r.icao + " " + r.wind + " " + r.qnh; SIZE sz; GetTextExtentPoint32A(hDC, s.c_str(), (int)s.size(), &sz); if (sz.cx > contentW) contentW = sz.cx; }
