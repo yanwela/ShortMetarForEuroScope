@@ -9,21 +9,23 @@ All commands are typed into the EuroScope chat box, starting with ".sm".
   TR: Komut listesini gosterir.
   EN: Shows the command list.
 
-.sm all
+.sm all   (onerilen komut / recommended command)
   TR: Tum LT* meydanlarinin metarlarini listeler.
   EN: Lists metars for all LT* airports.
 
-.sm used
+.sm used   (onerilen komut / recommended command)
   TR: Aktif trafigi gosterir (kalkis + varis birlikte).
   EN: Shows active traffic (departures + arrivals combined).
 
-.sm online
+.sm online   (onerilen komut / recommended command)
   TR: Kendi CID'inizin bagli oldugu sektordeki aktif trafigi gosterir.
   EN: Shows active traffic in the sector your CID is currently connected to.
 
-.sm online sct ANK_W78_CTR   (kisaca: .sm online sct W78)
-  TR: Belirtilen sektordeki aktif trafigi gosterir.
-  EN: Shows active traffic in the specified sector.
+.sm online sct ANK_W78   (kisaca: .sm online sct W78)
+  TR: Belirtilen sektordeki aktif trafigi gosterir. Bazi pozisyonlarin kimligi
+      alt cizgi/sayi icermeyen kisa bir kod da olabilir (orn. ANKC).
+  EN: Shows active traffic in the specified sector. Some positions use a
+      compact identifier with no underscore/number at all (e.g. ANKC).
 
 .sm filter LTFM              (veya: .sm filter LTFM,LTAW,LTAI)
   TR: Tek veya birden fazla meydani virgulle ayirarak filtreler.
@@ -33,11 +35,11 @@ All commands are typed into the EuroScope chat box, starting with ".sm".
   TR: Veri kaynagini VATSIM yapar.
   EN: Sets the data source to VATSIM.
 
-.sm rasat
+.sm rasat   (onerilen komut / recommended command)
   TR: Veri kaynagini RASAT (MGM) yapar (varsayilan).
   EN: Sets the data source to RASAT (MGM) (default).
 
-.sm eng
+.sm eng   (onerilen komut / recommended command)
   TR: Dili Ingilizce yapar (varsayilan).
   EN: Switches language to English (default).
 
