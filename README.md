@@ -12,9 +12,17 @@ ShortMetar, EuroScope içerisinde Türk meydanlarının METAR bilgilerini hızl�
 
 `.sm filter LTFM,LTAW,LTAI` — İstenilen birden fazla meydanı gösterir.
 
+`.sm online` — Bağlı olduğunuz CID'in sorumlu olduğu sektördeki aktif trafiği gösterir.
+
+`.sm online sct ANK_W78_CTR` (kısaca `.sm online sct W78`) — Belirtilen sektördeki aktif trafiği gösterir.
+
 `.sm vatsim` — Veri kaynağını VATSIM olarak değiştirir.
 
-`.sm rasat` — Veri kaynağını MGM RASAT olarak değiştirir.
+`.sm rasat` — Veri kaynağını MGM RASAT olarak değiştirir (**varsayılan**).
+
+`.sm eng` — Dili İngilizce yapar (**varsayılan**).
+
+`.sm tr` — Dili Türkçe yapar.
 
 `.sm refresh` — METAR verilerini hemen günceller.
 
@@ -22,7 +30,7 @@ ShortMetar, EuroScope içerisinde Türk meydanlarının METAR bilgilerini hızl�
 
 `.sm ack` — Tüm sarı uyarıları onaylar ve temizler (C butonu da aynı).
 
-`.sm save` — Panel konumu, font boyutu ve kaynak ayarlarını `SMconfig.json` dosyasına kaydeder.
+`.sm save` — Panel konumu, font boyutu, veri kaynağı ve dil ayarlarını `SMconfig.json` dosyasına kaydeder.
 
 `.sm reload` — Ayarları `SMconfig.json` dosyasından yeniden yükler.
 
@@ -30,15 +38,26 @@ ShortMetar, EuroScope içerisinde Türk meydanlarının METAR bilgilerini hızl�
 
 `.sm help` — Komut listesini görüntüler.
 
+## Panel Butonları
+
+| Buton | İşlev |
+|---|---|
+| **C** | Tüm sarı uyarıları onaylar (`.sm ack` ile aynı) |
+| **-** / **+** | Yazı tipi boyutunu küçültür / büyütür |
+| **^** / **v** | Paneli küçültür / genişletir (collapse) |
+| Başlık çubuğu | Sürükleyerek panelin ekrandaki konumunu değiştirir |
+
 ## Çalışma Mantığı
 
 * Başlangıçta tüm LT* meydanlarının METAR verileri yüklenir.
-* Veriler VATSIM veya MGM RASAT üzerinden çekilir.
+* Veriler VATSIM veya MGM RASAT üzerinden çekilir (varsayılan kaynak: **RASAT**).
 * VATSIM ağı üzerindeki kalkış ve varış trafiği düzenli olarak takip edilir.
-* QNH ve rüzgar değişiklikleri zaman bazlı otomatik olarak tespit edilir.
+* QNH ve rüzgar değişiklikleri zaman bazlı otomatik olarak tespit edilir; sadece QNH değişirse yalnızca QNH sarı, hem QNH hem rüzgar değişirse satırın tamamı sarı gösterilir.
 * Yeni tespit edilen trafik kısa süreli olarak mavi bir fontla vurgulanır.
-* Filtreleme sayesinde yalnızca istenilen meydan(lar) görüntülenebilir.
-* Panel konumu, yazı boyutu ve veri kaynağı Smconfig.json sayesinde kalıcı olarak saklanır.
+* Filtreleme sayesinde yalnızca istenilen meydan(lar) veya sektöre bağlı trafik görüntülenebilir.
+* `.sm online` / `.sm online sct` filtresi, EuroScope sektör dosyasındaki (`.ese`) `[POSITIONS]` ve `[AIRSPACE]` verilerinden hangi pozisyonun hangi meydanlardan sorumlu olduğunu otomatik olarak çıkarır.
+* Arayüz dili İngilizce/Türkçe olarak değiştirilebilir (varsayılan: **İngilizce**).
+* Panel konumu, yazı boyutu, veri kaynağı ve dil ayarı `SMconfig.json` dosyasında kalıcı olarak saklanır.
 
 ---
 ## Nasıl Yüklenir?
