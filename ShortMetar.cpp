@@ -23,7 +23,7 @@ static const char* LT_STATIONS =
 "LTDA,LTDB,LTFA,LTFB,LTFC,LTFD,LTFE,LTFG,LTFH,LTFJ,LTFK,LTFM,LTFO,LTHA,LTHB";
 
 CShortMetar::CShortMetar()
-    : CPlugIn(COMPATIBILITY_CODE, "ShortMetar", "1.1.0", "Alp", "Free to use"),
+    : CPlugIn(COMPATIBILITY_CODE, "ShortMetar", "1.1.1", "Alp", "Free to use"),
     m_IsFetching(false), m_FetchTraffic(false), m_FilterMode(FilterMode::All),
     m_PanelX(80), m_PanelY(80),
     m_Source(Source::Rasat), m_Collapsed(false), m_FontSize(13)
@@ -615,7 +615,11 @@ void CShortMetar::HttpGetMulti(const wchar_t* host, const std::vector<std::wstri
 // RASAT cevabindaki her "observationText":"METAR ... " icinden ICAO+ruzgar+QNH ayikla.
 void CShortMetar::ParseRasat(const std::string& raw)
 {
-    std::lock_guard<std::mutex> lock(m_DataMutex);
+    // RASAT bir istasyon icin birden fazla gozlem donduruyor (orn. 311220Z, 311150Z, 311120Z...).
+    // Once tum gozlemleri tara, her ICAO icin zaman damgasi (DDHHMMZ) en buyuk olani sec;
+    // yoksa siradaki (daha eski) gozlem son islenen olarak map'i ezip "1 metar geride" gostermeye neden oluyordu.
+    struct Obs { std::string wind, qnh; long time; };
+    std::map<std::string, Obs> latest;
     const std::string key = "\"observationText\":\"";
     size_t p = 0;
     while ((p = raw.find(key, p)) != std::string::npos) {
@@ -626,14 +630,28 @@ void CShortMetar::ParseRasat(const std::string& raw)
         p = end + 1;
 
         std::stringstream ls(text);
-        std::string tok, icao, wind = "-", qnh = "-"; bool haveIcao = false;
+        std::string tok, icao, wind = "-", qnh = "-", timeTok; bool haveIcao = false;
         while (ls >> tok) {
             if (tok == "METAR" || tok == "SPECI") continue;
             if (!haveIcao) { if (tok.size() == 4 && tok.rfind("LT", 0) == 0) { icao = tok; haveIcao = true; } continue; }
+            if (timeTok.empty() && tok.size() == 7 && tok.back() == 'Z' &&
+                std::all_of(tok.begin(), tok.end() - 1, [](unsigned char c) { return isdigit(c); })) {
+                timeTok = tok; continue;
+            }
             if (wind == "-" && tok.size() >= 5 && tok.size() <= 11 && tok.substr(tok.size() - 2) == "KT") wind = tok;
             else if (qnh == "-" && tok.size() == 5 && tok[0] == 'Q') qnh = tok;
         }
         if (!haveIcao) continue;
+        long t = timeTok.empty() ? 0 : atol(timeTok.substr(0, timeTok.size() - 1).c_str());
+        auto itL = latest.find(icao);
+        if (itL == latest.end() || t >= itL->second.time) latest[icao] = { wind, qnh, t };
+    }
+
+    std::lock_guard<std::mutex> lock(m_DataMutex);
+    for (auto& kv : latest) {
+        const std::string& icao = kv.first;
+        const std::string& wind = kv.second.wind;
+        const std::string& qnh = kv.second.qnh;
         auto it = m_MetarData.find(icao);
         int alert = 0;
         if (it != m_MetarData.end()) {
