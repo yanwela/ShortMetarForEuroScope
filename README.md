@@ -1,73 +1,73 @@
 # ShortMetarForEuroScope
 
-ShortMetar, EuroScope içerisinde Türk meydanlarının METAR bilgilerini hızlı ve kompakt şekilde görüntülemek için geliştirilmiş bir eklentidir. Veriler VATSIM veya MGM RASAT kaynaklarından alınabilir ve aktif trafik bilgileriyle birlikte filtrelenebilir. Panel sürüklenebilir, küçültülebilir, yazı boyutu değiştirilebilir ve ayarlar otomatik olarak saklanabilir.
+ShortMetar is a compact METAR plugin developed for EuroScope. It supports VATSIM and MGM RASAT sources, displays LT* aerodromes, filters by active traffic, highlights wind and QNH changes, updates automatically, and saves user settings.
 
-## Komutlar
+## Commands
 
-`.sm all` — **Önerilen komut.** Tüm LT* meydanlarının METAR bilgilerini gösterir.
+`.sm all` — **Recommended command.** Shows METARs for all LT* airports.
 
-`.sm used` — **Önerilen komut.** Sadece aktif kalkış veya varış trafiği bulunan meydanları gösterir.
+`.sm used` — **Recommended command.** Shows only airports with active departure or arrival traffic.
 
-`.sm filter LTFM` — İstenilen tek bir meydanı gösterir.
+`.sm filter LTFM` — Shows a single requested airport.
 
-`.sm filter LTFM,LTAW,LTAI` — İstenilen birden fazla meydanı gösterir.
+`.sm filter LTFM,LTAW,LTAI` — Shows multiple requested airports.
 
-`.sm online` — **Önerilen komut.** Bağlı olduğunuz CID'in sorumlu olduğu sektördeki aktif trafiği gösterir.
+`.sm online` — **Recommended command.** Shows active traffic in the sector your connected CID is responsible for.
 
-`.sm online sct ANK_W78` (kısaca `.sm online sct W78`) — Belirtilen sektördeki aktif trafiği gösterir. Bazı pozisyonların kimliği alt çizgi/sayı içermeyen kısa bir kod da olabilir (örn. `ANKC`).
+`.sm online sct ANK_W78` (short form: `.sm online sct W78`) — Shows active traffic in the specified sector. Some positions may have a compact identifier with no underscore/number at all (e.g. `ANKC`).
 
-`.sm vatsim` — Veri kaynağını VATSIM olarak değiştirir.
+`.sm vatsim` — Switches the data source to VATSIM.
 
-`.sm rasat` — **Önerilen komut.** Veri kaynağını MGM RASAT olarak değiştirir (**varsayılan**).
+`.sm rasat` — **Recommended command.** Switches the data source to MGM RASAT (**default**).
 
-`.sm eng` — **Önerilen komut.** Dili İngilizce yapar (**varsayılan**).
+`.sm eng` — **Recommended command.** Switches the language to English (**default**).
 
-`.sm tr` — Dili Türkçe yapar.
+`.sm tr` — Switches the language to Turkish.
 
-`.sm refresh` — METAR verilerini hemen günceller.
+`.sm refresh` — Updates METAR data immediately.
 
-`.sm refresh airport` — Trafik listesini hemen günceller.
+`.sm refresh airport` — Updates the traffic list immediately.
 
-`.sm ack` — Tüm sarı uyarıları onaylar ve temizler (C butonu da aynı).
+`.sm ack` — Acknowledges and clears all yellow alerts (same as the "C" button).
 
-`.sm save` — Panel konumu, font boyutu, veri kaynağı ve dil ayarlarını `SMconfig.json` dosyasına kaydeder.
+`.sm save` — Saves panel position, font size, data source, and language settings to `SMconfig.json`.
 
-`.sm reload` — Ayarları `SMconfig.json` dosyasından yeniden yükler.
+`.sm reload` — Reloads settings from `SMconfig.json`.
 
-`.sm show` veya `.sm chatbox` — Gizlenmiş chatbox'u tekrar açar.
+`.sm show` or `.sm chatbox` — Reopens the hidden chatbox.
 
-`.sm help` — Komut listesini görüntüler.
+`.sm help` — Displays the command list.
 
-## Panel Butonları
+## Panel Buttons
 
-| Buton | İşlev |
+| Button | Function |
 |---|---|
-| **C** | Tüm sarı uyarıları onaylar (`.sm ack` ile aynı) |
-| **-** / **+** | Yazı tipi boyutunu küçültür / büyütür |
-| **^** / **v** | Paneli küçültür / genişletir (collapse) |
-| Başlık çubuğu | Sürükleyerek panelin ekrandaki konumunu değiştirir |
+| **C** | Acknowledges all yellow alerts (same as `.sm ack`) |
+| **-** / **+** | Decreases / increases font size |
+| **^** / **v** | Collapses / expands the panel |
+| Title bar | Drag to move the panel's position on screen |
 
-## Çalışma Mantığı
+## How It Works
 
-* Başlangıçta tüm LT* meydanlarının METAR verileri yüklenir.
-* Veriler VATSIM veya MGM RASAT üzerinden çekilir (varsayılan kaynak: **RASAT**).
-* VATSIM ağı üzerindeki kalkış ve varış trafiği düzenli olarak takip edilir.
-* QNH ve rüzgar değişiklikleri zaman bazlı otomatik olarak tespit edilir; sadece QNH değişirse yalnızca QNH sarı, hem QNH hem rüzgar değişirse satırın tamamı sarı gösterilir.
-* Yeni tespit edilen trafik kısa süreli olarak mavi bir fontla vurgulanır.
-* Filtreleme sayesinde yalnızca istenilen meydan(lar) veya sektöre bağlı trafik görüntülenebilir.
-* `.sm online` / `.sm online sct` filtresi, EuroScope sektör dosyasındaki (`.ese`) `[POSITIONS]` ve `[AIRSPACE]` verilerinden hangi pozisyonun hangi meydanlardan sorumlu olduğunu otomatik olarak çıkarır.
-* Arayüz dili İngilizce/Türkçe olarak değiştirilebilir (varsayılan: **İngilizce**).
-* Panel konumu, yazı boyutu, veri kaynağı ve dil ayarı `SMconfig.json` dosyasında kalıcı olarak saklanır.
+* All LT* airport METAR data is loaded at startup.
+* Data is fetched via VATSIM or MGM RASAT (default source: **RASAT**).
+* Departure and arrival traffic on the VATSIM network is tracked continuously.
+* QNH and wind changes are detected automatically over time; if only QNH changes, only the QNH is highlighted yellow, and if both QNH and wind change, the entire line is highlighted yellow.
+* Newly detected traffic is highlighted briefly in blue.
+* Filtering lets you display only the airport(s) or sector-related traffic you want.
+* The `.sm online` / `.sm online sct` filter automatically determines which position is responsible for which airports using the `[POSITIONS]` and `[AIRSPACE]` data in the EuroScope sector file (`.ese`).
+* The interface language can be switched between English and Turkish (default: **English**).
+* Panel position, font size, data source, and language settings are stored persistently in `SMconfig.json`.
 
 ---
-## Nasıl Yüklenir?
-* Öncelikle eklentiyi indiriniz.
-* EuroScope'u açtıktan sonra Settings > Plug-ins bölümüne giriniz.
-* Load butonuna basarak indirdiğiniz .dll dosyasını seçiniz.
-* Eklenti yüklendikten sonra aşağı kaydırınız ve Standart ES Radar Screen üzerinde çizilmesine izin vermek için aşağıdaki görselde kırmızı ile işaretlenen butona basınız.
-* Ayarlar penceresini kapattıktan sonra eklenti kullanıma hazır olacaktır.
+## How to Install
+* First, download the plugin.
+* After opening EuroScope, go to Settings > Plug-ins.
+* Click Load and select the downloaded .dll file.
+* After the plugin loads, scroll down and click the button marked in red in the image below to allow it to draw on the Standard ES Radar Screen.
+* Once you close the settings window, the plugin will be ready to use.
 
-Gerekli adımlar aşağıdaki görsellerde sırayla gösterilmiştir.
+The required steps are shown in order in the images below.
 
 <img width="276" height="450" alt="1" src="https://github.com/user-attachments/assets/562bac05-0ab6-4a5f-89a6-8e3de70a4ae3" />
 <img width="727" height="576" alt="2" src="https://github.com/user-attachments/assets/5c9b2422-ab93-4d1a-8b75-18f5944be08e" />
