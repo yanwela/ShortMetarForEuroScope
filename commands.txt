@@ -51,6 +51,12 @@ All commands are typed into the EuroScope chat box, starting with ".sm".
   TR: Tum sari uyarilari onaylar (panel uzerindeki "C" butonu ile aynidir).
   EN: Acknowledges all yellow alerts (same as the "C" button on the panel).
 
+.sm debug
+  TR: Her basarili RASAT/VATSIM guncellemesinde chat'e mesaj basilsin mi, acar/kapatir
+      (varsayilan: kapali - guncelleme zaten sari renkle belli oluyor, spam olmasin diye).
+  EN: Toggles whether a chat message is shown on every successful RASAT/VATSIM update
+      (default: off - the update is already visible via the yellow highlight, kept quiet).
+
 .sm refresh
   TR: METAR verisini hemen gunceller.
   EN: Updates METAR data immediately.
