@@ -30,6 +30,8 @@ ShortMetar is a compact METAR plugin developed for EuroScope. It supports VATSIM
 
 `.sm ack` — Acknowledges and clears all yellow alerts (same as the "C" button).
 
+`.sm debug` — Toggles whether a chat message is shown on every successful RASAT/VATSIM update (default: off — the update is already visible via the yellow highlight, kept quiet to avoid spam).
+
 `.sm save` — Saves panel position, font size, data source, and language settings to `SMconfig.json`.
 
 `.sm reload` — Reloads settings from `SMconfig.json`.
@@ -78,3 +80,13 @@ The required steps are shown in order in the images below.
 made by alp-1863530
 
 Discord: perlanmayer
+
+---
+## Changelog
+
+### v1.1.5
+* Fixed RASAT sometimes showing an outdated observation instead of the latest one.
+* Fixed RASAT occasionally failing to fetch data on some networks.
+* Clicking a single METAR row now acknowledges just that airport, instead of only being able to acknowledge everything at once.
+* The "C" button now also clears the blue "new traffic" highlight immediately, not just yellow alerts.
+* Added `.sm debug` to toggle the "RASAT/VATSIM updated" chat messages (default: off); the setting is remembered between sessions.
