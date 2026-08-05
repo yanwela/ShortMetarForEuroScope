@@ -23,12 +23,16 @@ static const char* LT_STATIONS =
 "LTDA,LTDB,LTFA,LTFB,LTFC,LTFD,LTFE,LTFG,LTFH,LTFJ,LTFK,LTFM,LTFO,LTHA,LTHB";
 
 CShortMetar::CShortMetar()
-    : CPlugIn(COMPATIBILITY_CODE, "ShortMetar", "1.1.1", "Alp", "Free to use"),
+    : CPlugIn(COMPATIBILITY_CODE, "ShortMetar", "1.1.5", "Alp", "Free to use"),
     m_IsFetching(false), m_FetchTraffic(false), m_FilterMode(FilterMode::All),
     m_PanelX(80), m_PanelY(80),
     m_Source(Source::Rasat), m_Collapsed(false), m_FontSize(13)
 {
     g_pPlugin = this;
+    {   // SM_http_debug.txt her EuroScope/plugin acilisinda (yeni session) sifirlanir; fetch'ler icinde biriktirir
+        FILE* fp = nullptr;
+        if (fopen_s(&fp, (PluginDir() + "SM_http_debug.txt").c_str(), "w") == 0 && fp) fclose(fp);
+    }
     LoadFont();
     LoadState();    // SMconfig.json'dan konum/font/kaynak yukle
     LoadSectorData();   // .ese dosyasindan pozisyon/sektor kapsama verisini yukle
@@ -160,8 +164,10 @@ void CShortMetar::FetchMetarAsync()
             int emptyCount = 0;
             for (auto& r : results) { if (!r.empty()) { ParseRasat(r); any = true; } else emptyCount++; }
             if (any) {
-                char msg[96]; sprintf_s(msg, L("RASAT guncellendi (%d/%d grup bos).", "RASAT updated (%d/%d groups empty)."), emptyCount, (int)results.size());
-                DisplayUserMessage("ShortMetar", "RASAT", emptyCount > 0 ? msg : L("RASAT guncellendi.", "RASAT updated."), true, true, true, false, false);
+                if (m_DebugMode) {   // guncellendi bilgisi zaten sari renkle gorunuyor, spam olmasin diye varsayilan kapali
+                    char msg[96]; sprintf_s(msg, L("RASAT guncellendi (%d/%d grup bos).", "RASAT updated (%d/%d groups empty)."), emptyCount, (int)results.size());
+                    DisplayUserMessage("ShortMetar", "RASAT", emptyCount > 0 ? msg : L("RASAT guncellendi.", "RASAT updated."), true, true, true, false, false);
+                }
             }
             else {
                 DisplayUserMessage("ShortMetar", "RASAT", L("RASAT cekilemedi.", "RASAT fetch failed."), true, true, true, false, false);
@@ -170,7 +176,7 @@ void CShortMetar::FetchMetarAsync()
         }
         else {
             std::string metar = HttpGet(L"metar.vatsim.net", L"/LT");
-            if (!metar.empty()) { ParseBulkMetar(metar); DisplayUserMessage("ShortMetar", "VATSIM", L("METAR guncellendi.", "METAR updated."), true, true, true, false, false); }
+            if (!metar.empty()) { ParseBulkMetar(metar); if (m_DebugMode) DisplayUserMessage("ShortMetar", "VATSIM", L("METAR guncellendi.", "METAR updated."), true, true, true, false, false); }
             else DisplayUserMessage("ShortMetar", "VATSIM", L("Veri cekilemedi.", "Data fetch failed."), true, true, true, false, false);
         }
     }
@@ -208,8 +214,8 @@ void CShortMetar::SaveState()
     if (fopen_s(&fp, path.c_str(), "w") == 0 && fp) {
         const char* src = (m_Source == Source::Vatsim) ? "vatsim" : "rasat";
         const char* lang = (m_Language == Language::Turkish) ? "tr" : "eng";
-        fprintf(fp, "{\n  \"x\": %d,\n  \"y\": %d,\n  \"fontSize\": %d,\n  \"source\": \"%s\",\n  \"language\": \"%s\"\n}\n",
-            m_PanelX, m_PanelY, m_FontSize, src, lang);
+        fprintf(fp, "{\n  \"x\": %d,\n  \"y\": %d,\n  \"fontSize\": %d,\n  \"source\": \"%s\",\n  \"language\": \"%s\",\n  \"debug\": %d\n}\n",
+            m_PanelX, m_PanelY, m_FontSize, src, lang, m_DebugMode ? 1 : 0);
         fclose(fp);
     }
 }
@@ -248,6 +254,7 @@ void CShortMetar::LoadState()
     std::string lang = readStr("language");
     if (lang == "tr") m_Language = Language::Turkish;
     else              m_Language = Language::English;   // varsayilan ingilizce
+    m_DebugMode = readInt("debug", 0) != 0;
 }
 
 // EuroScope.ttf'yi DLL'in yanindan ozel font olarak yukle (DLL ile ayni klasore koy)
@@ -261,6 +268,16 @@ void CShortMetar::AcknowledgeAll()
 {
     std::lock_guard<std::mutex> lock(m_DataMutex);
     for (auto& kv : m_MetarData) kv.second.alert = 0;
+    m_NewTraffic.clear();   // mavi "yeni trafik" uyarilarini da hemen temizle, 6sn'yi bekleme
+}
+
+// Tek bir meydanin uyarisini onayla (standart ES METAR kutusunda satira tiklamakla aynisi)
+void CShortMetar::AcknowledgeOne(const std::string& icao)
+{
+    std::lock_guard<std::mutex> lock(m_DataMutex);
+    auto it = m_MetarData.find(icao);
+    if (it != m_MetarData.end()) it->second.alert = 0;
+    m_NewTraffic.erase(icao);   // mavi "yeni trafik" uyarisini da hemen temizle
 }
 
 // Basit satir okuyucu: \r ve bastaki/sondaki bosluklari temizler
@@ -463,6 +480,7 @@ void CShortMetar::ShowHelp()
     DisplayUserMessage("ShortMetar", tag, L(".sm save             -> konum+font'u SMconfig.json'a kaydet", ".sm save             -> save position+font to SMconfig.json"), true, true, true, false, false);
     DisplayUserMessage("ShortMetar", tag, L(".sm reload           -> SMconfig.json'u yeniden yukle", ".sm reload           -> reload SMconfig.json"), true, true, true, false, false);
     DisplayUserMessage("ShortMetar", tag, L(".sm chatbox          -> panel gizliyse tekrar ac", ".sm chatbox          -> reopen panel if hidden"), true, true, true, false, false);
+    DisplayUserMessage("ShortMetar", tag, L(".sm debug            -> her basarili guncellemede mesaj goster/gizle (varsayilan: kapali)", ".sm debug            -> show/hide a message on every successful update (default: off)"), true, true, true, false, false);
 }
 
 bool CShortMetar::OnCompileCommand(const char* sCommandLine)
@@ -480,6 +498,14 @@ bool CShortMetar::OnCompileCommand(const char* sCommandLine)
     if (rest == "save") { SaveState(); DisplayUserMessage("ShortMetar", L("Config", "Config"), L("Konum ve font kaydedildi (SMconfig.json).", "Position and font saved (SMconfig.json)."), true, true, true, false, false); return true; }
     if (rest == "reload") { LoadState(); DisplayUserMessage("ShortMetar", L("Config", "Config"), L("SMconfig.json yeniden yuklendi.", "SMconfig.json reloaded."), true, true, true, false, false); return true; }
     if (rest == "ack") { AcknowledgeAll(); DisplayUserMessage("ShortMetar", "ACK", L("Tum uyarilar onaylandi.", "All alerts acknowledged."), true, true, true, false, false); return true; }
+    if (rest == "debug") {
+        m_DebugMode = !m_DebugMode;
+        SaveState();
+        DisplayUserMessage("ShortMetar", "Debug", m_DebugMode
+            ? L("Debug modu acik: her basarili guncellemede mesaj gosterilecek.", "Debug mode on: a message will be shown on every successful update.")
+            : L("Debug modu kapali.", "Debug mode off."), true, true, true, false, false);
+        return true;
+    }
     if (rest == "eng") { m_Language = Language::English; SaveState(); DisplayUserMessage("ShortMetar", "Language", "English.", true, true, true, false, false); return true; }
     if (rest == "tr") { m_Language = Language::Turkish; SaveState(); DisplayUserMessage("ShortMetar", "Dil", "Turkce.", true, true, true, false, false); return true; }
     if (rest == "refresh") {
@@ -553,17 +579,90 @@ bool CShortMetar::OnCompileCommand(const char* sCommandLine)
     return true;
 }
 
+// Sistemin DNS'i bir host'u cozemedigi (ERROR_WINHTTP_NAME_NOT_RESOLVED) durumlarda, Cloudflare'in
+// DNS-over-HTTPS servisinden IP'yi kendimiz sorup o IP'ye baglaniriz; boylece sistemin bozuk/engellenmis
+// DNS'ini atlatmis oluruz (tarayicilarin "secure DNS" ile ayni sorunu atlatmasina benzer).
+static std::wstring ResolveViaCloudflareDoH(const wchar_t* host)
+{
+    std::wstring ip;
+    HINTERNET hSes = WinHttpOpen(L"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        WINHTTP_ACCESS_TYPE_NO_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+    if (!hSes) return ip;
+    WinHttpSetTimeouts(hSes, 5000, 5000, 5000, 5000);
+    HINTERNET hCon = WinHttpConnect(hSes, L"cloudflare-dns.com", INTERNET_DEFAULT_HTTPS_PORT, 0);
+    if (hCon) {
+        std::wstring path = L"/dns-query?name=" + std::wstring(host) + L"&type=A";
+        HINTERNET hReq = WinHttpOpenRequest(hCon, L"GET", path.c_str(), NULL, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE);
+        if (hReq) {
+            WinHttpAddRequestHeaders(hReq, L"Accept: application/dns-json\r\n", (DWORD)-1, WINHTTP_ADDREQ_FLAG_ADD);
+            if (WinHttpSendRequest(hReq, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, 0, 0) && WinHttpReceiveResponse(hReq, NULL)) {
+                std::string body; DWORD sz = 0;
+                do {
+                    if (WinHttpQueryDataAvailable(hReq, &sz) && sz > 0) {
+                        std::vector<char> buf(sz + 1, 0); DWORD rd = 0;
+                        if (WinHttpReadData(hReq, buf.data(), sz, &rd)) body.append(buf.data(), rd);
+                    }
+                } while (sz > 0);
+                // Ilk A kaydini (type:1) bul, CNAME (type:5) gibi diger kayitlari atla
+                size_t p = body.find("\"type\":1,\"TTL\"");
+                if (p != std::string::npos) {
+                    size_t d = body.find("\"data\":\"", p);
+                    if (d != std::string::npos) {
+                        d += 8;
+                        size_t e = body.find('"', d);
+                        if (e != std::string::npos) {
+                            std::string ipA = body.substr(d, e - d);
+                            ip.assign(ipA.begin(), ipA.end());
+                        }
+                    }
+                }
+            }
+            WinHttpCloseHandle(hReq);
+        }
+        WinHttpCloseHandle(hCon);
+    }
+    WinHttpCloseHandle(hSes);
+    return ip;
+}
+
+// SM_http_debug.txt satirlarina eklenen "gg.aa.yyyy ss:dd:sn" zaman damgasi
+static std::string NowTimestamp()
+{
+    SYSTEMTIME st; GetLocalTime(&st);
+    char buf[32];
+    sprintf_s(buf, "%02d.%02d.%04d %02d:%02d:%02d", st.wDay, st.wMonth, st.wYear, st.wHour, st.wMinute, st.wSecond);
+    return buf;
+}
+
 std::string CShortMetar::HttpGet(const wchar_t* host, const wchar_t* path, bool https)
 {
     std::string result;
-    HINTERNET hSes = WinHttpOpen(L"ShortMetarPlugin/1.0", WINHTTP_ACCESS_TYPE_NO_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+    // Gercek bir tarayici User-Agent'i kullan: site bot/otomasyon imzali (orn. eski "ShortMetarPlugin/1.0") istekleri
+    // bir WAF/anti-bot katmanindan reddediyor olabilir - tarayicida acilirken calisip burada calismamasinin
+    // en olasi sebebi bu (HTTP Debugger Pro'nun da benzer sekilde engellenmesiyle ayni kaynak olabilir).
+    HINTERNET hSes = WinHttpOpen(L"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36", WINHTTP_ACCESS_TYPE_NO_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
     if (!hSes) return result;
     WinHttpSetTimeouts(hSes, 8000, 8000, 8000, 8000);   // takilmayi onle: resolve/connect/send/receive 8sn
-    HINTERNET hCon = WinHttpConnect(hSes, host, https ? INTERNET_DEFAULT_HTTPS_PORT : INTERNET_DEFAULT_HTTP_PORT, 0);
+    INTERNET_PORT port = https ? INTERNET_DEFAULT_HTTPS_PORT : INTERNET_DEFAULT_HTTP_PORT;
+    HINTERNET hCon = WinHttpConnect(hSes, host, port, 0);
+    bool usingFallbackIp = false;
+    std::wstring hostHeader = L"Host: " + std::wstring(host) + L"\r\n";
     if (hCon) {
-        HINTERNET hReq = WinHttpOpenRequest(hCon, L"GET", path, NULL, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, https ? WINHTTP_FLAG_SECURE : 0);
-        if (hReq) {
-            if (WinHttpSendRequest(hReq, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, 0, 0) && WinHttpReceiveResponse(hReq, NULL)) {
+        for (int attempt = 0; attempt < 2; ++attempt) {
+            HINTERNET hReq = WinHttpOpenRequest(hCon, L"GET", path, NULL, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, https ? WINHTTP_FLAG_SECURE : 0);
+            if (!hReq) break;
+            WinHttpAddRequestHeaders(hReq, L"Accept: text/html,application/json\r\nAccept-Language: tr-TR,tr;q=0.9,en;q=0.8\r\n", (DWORD)-1, WINHTTP_ADDREQ_FLAG_ADD);
+            if (usingFallbackIp) {
+                WinHttpAddRequestHeaders(hReq, hostHeader.c_str(), (DWORD)-1, WINHTTP_ADDREQ_FLAG_ADD | WINHTTP_ADDREQ_FLAG_REPLACE);
+                if (https) {
+                    DWORD secFlags = SECURITY_FLAG_IGNORE_CERT_CN_INVALID | SECURITY_FLAG_IGNORE_CERT_DATE_INVALID;
+                    WinHttpSetOption(hReq, WINHTTP_OPTION_SECURITY_FLAGS, &secFlags, sizeof(secFlags));
+                }
+            }
+            BOOL sendOk = WinHttpSendRequest(hReq, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, 0, 0);
+            DWORD sendErr = sendOk ? 0 : GetLastError();
+            bool done = sendOk && WinHttpReceiveResponse(hReq, NULL);
+            if (done) {
                 DWORD sz = 0;
                 do {
                     if (WinHttpQueryDataAvailable(hReq, &sz) && sz > 0) {
@@ -573,6 +672,19 @@ std::string CShortMetar::HttpGet(const wchar_t* host, const wchar_t* path, bool 
                 } while (sz > 0);
             }
             WinHttpCloseHandle(hReq);
+            if (done) break;
+            // Sistem DNS'i cozemedi ve henuz fallback denenmediyse: Cloudflare DoH ile IP cozup tekrar dene
+            if (!usingFallbackIp && sendErr == ERROR_WINHTTP_NAME_NOT_RESOLVED) {
+                std::wstring ip = ResolveViaCloudflareDoH(host);
+                if (ip.empty()) break;
+                HINTERNET hConNew = WinHttpConnect(hSes, ip.c_str(), port, 0);
+                if (!hConNew) break;
+                WinHttpCloseHandle(hCon);
+                hCon = hConNew;
+                usingFallbackIp = true;
+                continue;
+            }
+            break;
         }
         WinHttpCloseHandle(hCon);
     }
@@ -584,16 +696,47 @@ std::string CShortMetar::HttpGet(const wchar_t* host, const wchar_t* path, bool 
 // Her istekte yeniden TLS el sikismasi yapmaktan cok daha hizli.
 void CShortMetar::HttpGetMulti(const wchar_t* host, const std::vector<std::wstring>& paths, std::vector<std::string>& outResults, size_t startIdx, bool https)
 {
-    HINTERNET hSes = WinHttpOpen(L"ShortMetarPlugin/1.0", WINHTTP_ACCESS_TYPE_NO_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
-    if (!hSes) return;
+    // Gercek bir tarayici User-Agent'i kullan: site bot/otomasyon imzali (orn. eski "ShortMetarPlugin/1.0") istekleri
+    // bir WAF/anti-bot katmanindan reddediyor olabilir - tarayicida acilirken calisip burada calismamasinin
+    // en olasi sebebi bu (HTTP Debugger Pro'nun da benzer sekilde engellenmesiyle ayni kaynak olabilir).
+    HINTERNET hSes = WinHttpOpen(L"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36", WINHTTP_ACCESS_TYPE_NO_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+    // Tani dosyasi: "RASAT Fetch failed" gordugumuzde GERCEK WinHTTP hatasini/HTTP durum kodunu gorebilelim
+    // diye (kor tahmin yerine). SM_http_debug.txt session icinde BIRIKTIRIR (append); her yeni EuroScope
+    // acilisinda (plugin constructor'i) sifirlanir - bkz. CShortMetar::CShortMetar().
+    FILE* dbg = nullptr;
+    fopen_s(&dbg, (PluginDir() + "SM_http_debug.txt").c_str(), "a");
+    DWORD totalStart = GetTickCount();
+    if (!hSes) { if (dbg) { fprintf(dbg, "[%s] WinHttpOpen failed, err=%lu\n", NowTimestamp().c_str(), GetLastError()); fclose(dbg); } return; }
     WinHttpSetTimeouts(hSes, 8000, 8000, 8000, 8000);
-    HINTERNET hCon = WinHttpConnect(hSes, host, https ? INTERNET_DEFAULT_HTTPS_PORT : INTERNET_DEFAULT_HTTP_PORT, 0);
+    INTERNET_PORT port = https ? INTERNET_DEFAULT_HTTPS_PORT : INTERNET_DEFAULT_HTTP_PORT;
+    HINTERNET hCon = WinHttpConnect(hSes, host, port, 0);
+    if (!hCon && dbg) fprintf(dbg, "[%s] WinHttpConnect failed, err=%lu\n", NowTimestamp().c_str(), GetLastError());
+    bool usingFallbackIp = false;
+    std::wstring hostHeader = L"Host: " + std::wstring(host) + L"\r\n";
     if (hCon) {
         for (size_t i = 0; i < paths.size(); ++i) {
             std::string result;
-            HINTERNET hReq = WinHttpOpenRequest(hCon, L"GET", paths[i].c_str(), NULL, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, https ? WINHTTP_FLAG_SECURE : 0);
-            if (hReq) {
-                if (WinHttpSendRequest(hReq, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, 0, 0) && WinHttpReceiveResponse(hReq, NULL)) {
+            bool done = false;
+            for (int attempt = 0; attempt < 2 && !done; ++attempt) {
+                DWORD reqStart = GetTickCount();
+                HINTERNET hReq = WinHttpOpenRequest(hCon, L"GET", paths[i].c_str(), NULL, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, https ? WINHTTP_FLAG_SECURE : 0);
+                if (!hReq) { if (dbg) fprintf(dbg, "[%s] req[%zu] WinHttpOpenRequest failed, err=%lu\n", NowTimestamp().c_str(), i, GetLastError()); break; }
+                WinHttpAddRequestHeaders(hReq, L"Accept: text/html,application/json\r\nAccept-Language: tr-TR,tr;q=0.9,en;q=0.8\r\n", (DWORD)-1, WINHTTP_ADDREQ_FLAG_ADD);
+                if (usingFallbackIp) {
+                    WinHttpAddRequestHeaders(hReq, hostHeader.c_str(), (DWORD)-1, WINHTTP_ADDREQ_FLAG_ADD | WINHTTP_ADDREQ_FLAG_REPLACE);
+                    if (https) {
+                        DWORD secFlags = SECURITY_FLAG_IGNORE_CERT_CN_INVALID | SECURITY_FLAG_IGNORE_CERT_DATE_INVALID;
+                        WinHttpSetOption(hReq, WINHTTP_OPTION_SECURITY_FLAGS, &secFlags, sizeof(secFlags));
+                    }
+                }
+                BOOL sendOk = WinHttpSendRequest(hReq, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, 0, 0);
+                DWORD sendErr = sendOk ? 0 : GetLastError();
+                BOOL recvOk = sendOk && WinHttpReceiveResponse(hReq, NULL);
+                DWORD recvErr = (sendOk && !recvOk) ? GetLastError() : 0;
+                DWORD statusCode = 0, szSt = sizeof(statusCode);
+                if (recvOk) WinHttpQueryHeaders(hReq, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+                    WINHTTP_HEADER_NAME_BY_INDEX, &statusCode, &szSt, WINHTTP_NO_HEADER_INDEX);
+                if (recvOk) {
                     DWORD sz = 0;
                     do {
                         if (WinHttpQueryDataAvailable(hReq, &sz) && sz > 0) {
@@ -601,13 +744,30 @@ void CShortMetar::HttpGetMulti(const wchar_t* host, const std::vector<std::wstri
                             if (WinHttpReadData(hReq, buf.data(), sz, &rd)) result.append(buf.data(), rd);
                         }
                     } while (sz > 0);
+                    done = true;
                 }
+                DWORD elapsedMs = GetTickCount() - reqStart;
+                if (dbg) fprintf(dbg, "[%s] req[%zu] attempt=%d fallbackIp=%d send=%d sendErr=%lu recv=%d recvErr=%lu status=%lu bodyLen=%zu elapsedMs=%lu\n",
+                    NowTimestamp().c_str(), i, attempt, usingFallbackIp, sendOk, sendErr, recvOk, recvErr, statusCode, result.size(), elapsedMs);
                 WinHttpCloseHandle(hReq);
+                if (!done && !usingFallbackIp && sendErr == ERROR_WINHTTP_NAME_NOT_RESOLVED) {
+                    std::wstring ip = ResolveViaCloudflareDoH(host);
+                    if (ip.empty()) break;
+                    HINTERNET hConNew = WinHttpConnect(hSes, ip.c_str(), port, 0);
+                    if (!hConNew) break;
+                    WinHttpCloseHandle(hCon);
+                    hCon = hConNew;
+                    usingFallbackIp = true;
+                    if (dbg) fprintf(dbg, "[%s] DNS basarisiz (12007), Cloudflare DoH ile %ls -> %ls kullaniliyor\n", NowTimestamp().c_str(), host, ip.c_str());
+                    continue;
+                }
+                break;
             }
             outResults[startIdx + i] = std::move(result);
         }
         WinHttpCloseHandle(hCon);
     }
+    if (dbg) { fprintf(dbg, "[%s] TOTAL: %zu istek, %lu ms surdu\n", NowTimestamp().c_str(), paths.size(), GetTickCount() - totalStart); fclose(dbg); }
     WinHttpCloseHandle(hSes);
 }
 
@@ -835,6 +995,8 @@ void CMyRadarScreen::OnRefresh(HDC hDC, int Phase)
     }
     else {
         for (auto& r : rows) {
+            RECT rowR = { px, y, px + W, y + ROW };
+            AddScreenObject(id, ("ROW:" + r.icao).c_str(), rowR, false, "");   // satira tiklayinca sadece o meydani onayla (standart ES METAR kutusuyla ayni)
             if (r.newTraffic) {                       // yeni meydan -> tum satir mavi (6sn)
                 SetTextColor(hDC, BLUE);
                 std::string s = r.icao + " " + r.wind + " " + r.qnh;
@@ -870,6 +1032,10 @@ void CMyRadarScreen::OnClickScreenObject(int ObjectType, const char* sObjectId, 
     if (!g_pPlugin || ObjectType != g_pPlugin->GetPanelObjID()) return;
     if (strcmp(sObjectId, "ACK") == 0) {
         g_pPlugin->AcknowledgeAll();   // C butonu -> tum uyarilari onayla
+        RequestRefresh();
+    }
+    else if (strncmp(sObjectId, "ROW:", 4) == 0) {
+        g_pPlugin->AcknowledgeOne(sObjectId + 4);   // satira tiklayinca sadece o meydani onayla
         RequestRefresh();
     }
     else if (strcmp(sObjectId, "COLLAPSE") == 0) {
