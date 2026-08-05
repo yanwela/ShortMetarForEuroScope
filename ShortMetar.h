@@ -56,6 +56,7 @@ private:
     Language     m_Language = Language::English;
     bool         m_Collapsed;
     int          m_FontSize;
+    bool         m_DebugMode = false;   // acikken her basarili "RASAT/VATSIM updated" mesaji chat'e basilir (varsayilan: kapali, sessiz)
 
     const int PANEL_OBJ_ID = 9001;
 
@@ -102,5 +103,6 @@ public:
     int& GetFontSize() { return m_FontSize; }
     void  SaveState();
     void  AcknowledgeAll();
+    void  AcknowledgeOne(const std::string& icao);
     const char* L(const char* trText, const char* enText) const { return m_Language == Language::Turkish ? trText : enText; }
 };
